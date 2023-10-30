@@ -35,7 +35,7 @@ func Worker(mapf func(string, string) []KeyValue,
 	// uncomment to send the Example RPC to the coordinator.
 	// CallExample()
 	for {
-		args := RequestTaskArgs{}
+		args := RequestTaskReply{}
 		reply := RequestTaskReply{}
 
 		res := call("Coordinator.RequestTask", &args, &reply)
@@ -110,6 +110,8 @@ func doReduce(reply *RequestTaskReply, reducef func(string, []string) string) {
 
 	// Update task status
 	reply.Task.Status = Finished
+	replyEx := RequestTaskReply{}
+	call("Coordinator.NotifyComplete", &reply, &replyEx)
 }
 
 func doMap(reply *RequestTaskReply, mapf func(string, string) []KeyValue) {
@@ -143,7 +145,10 @@ func doMap(reply *RequestTaskReply, mapf func(string, string) []KeyValue) {
 		os.Rename(ofile.Name(), oname)
 	}
 
+	// This information has to be sent to the server, ig
 	reply.Task.Status = Finished
+	replyEx := RequestTaskReply{}
+	call("Coordinator.NotifyComplete", &reply, &replyEx)
 }
 
 // example function to show how to make an RPC call to the coordinator.

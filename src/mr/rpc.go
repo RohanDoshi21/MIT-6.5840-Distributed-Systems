@@ -23,11 +23,11 @@ type ExampleReply struct {
 }
 
 // Add your RPC definitions here.
-type RequestTaskArgs struct{}
 
 type RequestTaskReply struct {
-	NReduce int
+	TaskNo  int
 	Task    MapReduceTask
+	NReduce int
 }
 
 type SubmitTaskArgs struct {

@@ -38,28 +38,69 @@ func (c *Coordinator) Example(args *ExampleArgs, reply *ExampleReply) error {
 	return nil
 }
 
-func (c *Coordinator) RequestTask(args *RequestTaskArgs, reply *RequestTaskReply) error {
+func (c *Coordinator) NotifyComplete(arg *RequestTaskReply, reply *RequestTaskReply) error {
+	c.mutex.Lock()
+	defer c.mutex.Unlock()
+
+	fmt.Println("Completed Task, ", arg)
+
+	// We will mark the task as complete
+	if arg.Task.Task == Map {
+		c.mapTasks[arg.TaskNo] = arg.Task
+	} else if arg.Task.Task == Reduce {
+		c.reduceTasks[arg.TaskNo] = arg.Task
+	}
+
+	return nil
+}
+
+func (c *Coordinator) RequestTask(args *RequestTaskReply, reply *RequestTaskReply) error {
 	c.mutex.Lock()
 	defer c.mutex.Unlock()
 
 	// Check if all the map tasks are done
 	if c.mapDone < len(c.inputFiles) {
-		reply.NReduce = c.nReduce
+		reply.TaskNo = c.mapDone
 		reply.Task = c.mapTasks[c.mapDone]
 		reply.Task.Status = Assigned
+		reply.NReduce = c.nReduce
 
 		c.mapDone++
 		return nil
 	}
 
+	for index, mapTask := range c.mapTasks {
+		// Before this, we need to ensure that the map task is completed
+		if mapTask.Status != Finished {
+			reply.TaskNo = index
+			reply.Task = c.mapTasks[index]
+			reply.Task.Status = Assigned
+			reply.NReduce = c.nReduce
+			return nil
+		}
+	}
+
 	// Check if all reduce tasks are done
 	if c.reduceDone < c.nReduce {
-		reply.NReduce = c.nReduce
+		reply.TaskNo = c.reduceDone
 		reply.Task = c.reduceTasks[c.reduceDone]
 		reply.Task.Status = Assigned
+		reply.NReduce = c.nReduce
 
 		c.reduceDone++
 		return nil
+	}
+
+	// Iterate through all the tasks of reduce
+	for index, reduceTask := range c.reduceTasks {
+		if reduceTask.Status != Finished {
+			reply.TaskNo = index
+			reply.Task = c.reduceTasks[index]
+			reply.Task.Status = Assigned
+			reply.NReduce = c.nReduce
+
+			return nil
+		}
 	}
 
 	reply.Task.Status = Status(Wait)
@@ -87,14 +128,17 @@ func (c *Coordinator) Done() bool {
 	c.mutex.Lock()
 	defer c.mutex.Unlock()
 
-	// Check if all map tasks are done
-	if c.mapDone < len(c.inputFiles) {
-		return false
+	// iterate map tasks and reduce tasks
+	for _, mapTask := range c.mapTasks {
+		if mapTask.Status != Finished {
+			return false
+		}
 	}
 
-	// Check if all reduce tasks are done
-	if c.reduceDone < c.nReduce {
-		return false
+	for _, reduceTask := range c.reduceTasks {
+		if reduceTask.Status != Finished {
+			return false
+		}
 	}
 
 	return true
