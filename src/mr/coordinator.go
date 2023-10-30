@@ -12,37 +12,24 @@ import "net/rpc"
 import "net/http"
 
 type Coordinator struct {
-	// Your definitions here.
 	inputFiles []string
 	nReduce    int
 
 	mapTasks    []MapReduceTask
 	reduceTasks []MapReduceTask
 
-	// Increase by 1 when one mapTask done. The map Phase is done when mapDone == inputFiles
-	mapDone int
-	// Increase by 1 when one reduceTask done. The reduce Phase is done when reduceDone == nReduce
+	mapDone    int
 	reduceDone int
 
-	// Each time allow one work to update
+	allMapComplete    bool
+	allReduceComplete bool
+
 	mutex sync.Mutex
-}
-
-// Your code here -- RPC handlers for the worker to call.
-
-// an example RPC handler.
-//
-// the RPC argument and reply types are defined in rpc.go.
-func (c *Coordinator) Example(args *ExampleArgs, reply *ExampleReply) error {
-	reply.Y = args.X + 1
-	return nil
 }
 
 func (c *Coordinator) NotifyComplete(arg *RequestTaskReply, reply *RequestTaskReply) error {
 	c.mutex.Lock()
 	defer c.mutex.Unlock()
-
-	fmt.Println("Completed Task, ", arg)
 
 	// We will mark the task as complete
 	if arg.Task.Task == Map {
@@ -61,6 +48,7 @@ func (c *Coordinator) RequestTask(args *RequestTaskReply, reply *RequestTaskRepl
 	// Check if all the map tasks are done
 	if c.mapDone < len(c.inputFiles) {
 		reply.TaskNo = c.mapDone
+		c.mapTasks[c.mapDone].TimeStamp = time.Now()
 		reply.Task = c.mapTasks[c.mapDone]
 		reply.Task.Status = Assigned
 		reply.NReduce = c.nReduce
@@ -69,20 +57,30 @@ func (c *Coordinator) RequestTask(args *RequestTaskReply, reply *RequestTaskRepl
 		return nil
 	}
 
-	for index, mapTask := range c.mapTasks {
-		// Before this, we need to ensure that the map task is completed
-		if mapTask.Status != Finished {
-			reply.TaskNo = index
-			reply.Task = c.mapTasks[index]
-			reply.Task.Status = Assigned
-			reply.NReduce = c.nReduce
-			return nil
+	// Before starting with reduce we need to ensure that the all map tasks are completed
+	if !c.allMapComplete {
+		for index, mapTask := range c.mapTasks {
+			if mapTask.Status != Finished {
+				if time.Since(mapTask.TimeStamp) > 10*time.Second {
+					reply.TaskNo = index
+					c.mapTasks[index].TimeStamp = time.Now()
+					reply.Task = c.mapTasks[index]
+					reply.Task.Status = Assigned
+					reply.NReduce = c.nReduce
+					return nil
+				} else {
+					reply.Task.Task = Wait
+					return nil
+				}
+			}
 		}
+		c.allMapComplete = true
 	}
 
 	// Check if all reduce tasks are done
 	if c.reduceDone < c.nReduce {
 		reply.TaskNo = c.reduceDone
+		c.reduceTasks[c.reduceDone].TimeStamp = time.Now()
 		reply.Task = c.reduceTasks[c.reduceDone]
 		reply.Task.Status = Assigned
 		reply.NReduce = c.nReduce
@@ -91,19 +89,28 @@ func (c *Coordinator) RequestTask(args *RequestTaskReply, reply *RequestTaskRepl
 		return nil
 	}
 
-	// Iterate through all the tasks of reduce
-	for index, reduceTask := range c.reduceTasks {
-		if reduceTask.Status != Finished {
-			reply.TaskNo = index
-			reply.Task = c.reduceTasks[index]
-			reply.Task.Status = Assigned
-			reply.NReduce = c.nReduce
+	// Check if all the reduce tasks are completed
+	if !c.allReduceComplete {
+		for index, reduceTask := range c.reduceTasks {
+			if reduceTask.Status != Finished {
+				if time.Since(reduceTask.TimeStamp) > 10*time.Second {
+					reply.TaskNo = index
+					c.reduceTasks[index].TimeStamp = time.Now()
+					reply.Task = c.reduceTasks[index]
+					reply.Task.Status = Assigned
+					reply.NReduce = c.nReduce
 
-			return nil
+					return nil
+				} else {
+					reply.Task.Task = Wait
+					return nil
+				}
+			}
 		}
+		c.allReduceComplete = true
 	}
 
-	reply.Task.Status = Status(Wait)
+	reply.Task.Status = Status(Exit)
 	return nil
 }
 
@@ -128,20 +135,22 @@ func (c *Coordinator) Done() bool {
 	c.mutex.Lock()
 	defer c.mutex.Unlock()
 
-	// iterate map tasks and reduce tasks
-	for _, mapTask := range c.mapTasks {
-		if mapTask.Status != Finished {
-			return false
+	/*
+		// iterate map tasks and reduce tasks
+		for _, mapTask := range c.mapTasks {
+			if mapTask.Status != Finished {
+				return false
+			}
 		}
-	}
 
-	for _, reduceTask := range c.reduceTasks {
-		if reduceTask.Status != Finished {
-			return false
+		for _, reduceTask := range c.reduceTasks {
+			if reduceTask.Status != Finished {
+				return false
+			}
 		}
-	}
+	*/
 
-	return true
+	return c.allMapComplete && c.allReduceComplete
 }
 
 // MakeCoordinator
@@ -157,6 +166,9 @@ func MakeCoordinator(files []string, nReduce int) *Coordinator {
 		mapDone:     0,
 		reduceDone:  0,
 		mutex:       sync.Mutex{},
+
+		allMapComplete:    false,
+		allReduceComplete: false,
 	}
 
 	// Initialize mapTasks
@@ -195,31 +207,4 @@ func generateInputFiles(i int, file int) []string {
 	}
 
 	return inputFiles
-}
-
-type Task int
-
-const (
-	Map Task = iota
-	Reduce
-	Exit
-	Wait
-)
-
-type Status int
-
-const (
-	Unassigned Status = iota
-	Assigned
-	Finished
-)
-
-type MapReduceTask struct {
-	Task      Task
-	Status    Status
-	TimeStamp time.Time
-	Index     int
-
-	InputFiles  []string
-	OutputFiles []string
 }
